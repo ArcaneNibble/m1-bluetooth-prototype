@@ -6,6 +6,7 @@ from fcntl import ioctl
 import mmap
 import os
 import struct
+import time
 
 
 VFIO_IOCTL_BASE = 0x3B64
@@ -127,9 +128,9 @@ def cfgwrite32(off, val):
     os.pwrite(device, struct.pack("<I", val), cfg_off+off)
 
 bar0 = libc_mmap(None, bar0_sz, mmap.PROT_READ | mmap.PROT_WRITE, mmap.MAP_SHARED, device, bar0_off)
-print(bar0)
+print(f"bar0 mapped at {bar0:016X}")
 bar1 = libc_mmap(None, bar1_sz, mmap.PROT_READ | mmap.PROT_WRITE, mmap.MAP_SHARED, device, bar1_off)
-print(bar1)
+print(f"bar1 mapped at {bar1:016X}")
 
 # bus master
 cfgwrite16(4, cfgread16(4) | 0x4)
@@ -147,10 +148,12 @@ if reset_thing & 0x80000 == 0:
 cfgwrite32(0x88, reset_thing | 0x10000)
 
 # dunno how much we need or anything
-mapped_memory = libc_mmap(None, 0x2000000, mmap.PROT_READ | mmap.PROT_WRITE, mmap.MAP_PRIVATE | mmap.MAP_ANONYMOUS, 0, 0)
-print(mapped_memory)
+# mapped_memory = libc_mmap(None, 0x2000000, mmap.PROT_READ | mmap.PROT_WRITE, mmap.MAP_PRIVATE | mmap.MAP_ANONYMOUS, 0, 0)
+mapped_memory = mmap.mmap(-1, 0x2000000, flags=mmap.MAP_PRIVATE | mmap.MAP_ANONYMOUS, prot=mmap.PROT_READ | mmap.PROT_WRITE)
+mapped_memory_addr = addressof(c_char.from_buffer(mapped_memory))
+print(f"memory region at {mapped_memory_addr:016X}")
 # dunno if dart limit is lower limit of iova or size limit
-ioctl(container, VFIO_IOMMU_MAP_DMA, struct.pack("<IIQQQ", 32, 3, mapped_memory, 0x2000000, 0x2000000))
+ioctl(container, VFIO_IOMMU_MAP_DMA, struct.pack("<IIQQQ", 32, 3, mapped_memory_addr, 0x2000000, 0x2000000))
 
 REG_0 = bar1 + 0x20044c
 RTI_GET_CAPABILITY = bar1 + 0x200450
@@ -197,7 +200,7 @@ def copy_to_map(off, data):
 	assert len(data) % 4 == 0
 	for i in range(len(data) // 4):
 		x = struct.unpack("<I", data[i*4:(i+1)*4])[0]
-		write32(mapped_memory+off+i*4, x)
+		write32(mapped_memory_addr+off+i*4, x)
 
 def divroundup(x, divisor):
 	return (x + divisor - 1) // divisor
@@ -210,6 +213,7 @@ with open('BCM4387C2_19.3.395.4044_PCIE_macOS_MaldivesES2_CLPC_3ANT_OS_USI_20211
 
 fw_sz = len(firmware)
 copy_to_map(0, firmware + b'\x00' * (4 - len(firmware) % 4))
+# mapped_memory[:len(firmware)] = firmware
 fw_sz_up = roundto(fw_sz, 0x200)
 print(f"fw size {fw_sz:x}")
 
@@ -235,5 +239,8 @@ write32(BAR1_IMG_SZ, fw_sz)
 
 print(read32(BOOTSTAGE))
 write32(IMG_DOORBELL, 0)
+print(read32(BOOTSTAGE))
+
+time.sleep(1)
 print(read32(BOOTSTAGE))
 
