@@ -219,8 +219,8 @@ RTI_CONTROL = bar0 + 0x144
 RTI_SLEEP_CONTROL = bar0 + 0x150
 CHIPCOMMON_CHIP_STATUS = bar0 + 0x302c
 DOORBELL_SOMETHING = bar0 + 0x6620
-DOORBELL_06 = bar0 + 0x174
-DOORBELL_7 = bar0 + 0x154
+DOORBELL_05 = bar0 + 0x174
+DOORBELL_6 = bar0 + 0x154
 REG_21 = bar0 + 0x610
 BTI_MSI_LO = bar0 + 0x580
 BTI_MSI_HI = bar0 + 0x584
@@ -264,6 +264,24 @@ def interrupt_handler():
 		if irq_do_main_stuff:
 			print("dump per info")
 			chexdump(mapped_memory[per_info_off:per_info_off+PER_INFO_SZ])
+			
+			for i in range(NUM_TRANSFER_RINGS):
+				print(f"TR{i} head {get_tr_head(i)} tail {get_tr_tail(i)}")
+			for i in range(NUM_COMPLETION_RINGS):
+				print(f"CR{i} head {get_cr_head(i)} tail {get_cr_tail(i)}")
+			
+			for cr_idx in range(NUM_COMPLETION_RINGS):
+				cr_head = get_cr_head(cr_idx)
+				cr_tail = get_cr_tail(cr_idx)
+				cr_off = completion_ring_0_off
+				cr_ent_sz = 0x10	# FIXME
+				cr_ring_sz = 128
+				
+				for cr_ent_idx in range(cr_tail, cr_head):
+					data = mapped_memory[cr_off+cr_ent_idx*cr_ent_sz:cr_off+(cr_ent_idx+1)*cr_ent_sz]
+					print(f"Data on CR{cr_idx}")
+					chexdump(data)
+					set_cr_tail(cr_idx, (cr_ent_idx + 1) % cr_ring_sz)
 
 irqthread = threading.Thread(target=interrupt_handler)
 irqthread.start()
@@ -284,12 +302,12 @@ time.sleep(1)
 
 print(mmioread32(BOOTSTAGE))
 
-mmiowrite32(DOORBELL_7, 1)
+mmiowrite32(DOORBELL_6, 1)
 mmiowrite32(BTI_MSI_LO, 0xfffff000)
 mmiowrite32(BTI_MSI_HI, 0)
 mmiowrite32(REG_24, 0x200)
 mmiowrite32(REG_21, 0x100)
-mmiowrite32(DOORBELL_7, 1)
+mmiowrite32(DOORBELL_6, 1)
 mmiowrite32(BTI_MSI_LO, 0xfffff000)
 mmiowrite32(BTI_MSI_HI, 0)
 mmiowrite32(REG_24, 0x200)
@@ -377,6 +395,29 @@ completion_rings_heads_off = transfer_rings_tails_off + NUM_TRANSFER_RINGS*2
 completion_rings_tails_off = completion_rings_heads_off + NUM_COMPLETION_RINGS*2
 transfer_ring_0_off = roundto(completion_rings_tails_off + NUM_COMPLETION_RINGS*2, 16)
 completion_ring_0_off = roundto(transfer_ring_0_off + 0x10 * 128, 16)
+ring0_iobuf_off = roundto(completion_ring_0_off + 0x10 * 128, 16)
+
+def get_tr_head(idx):
+	return struct.unpack("<H", mapped_memory[transfer_rings_heads_off+idx*2:transfer_rings_heads_off+idx*2+2])[0]
+def get_tr_tail(idx):
+	return struct.unpack("<H", mapped_memory[transfer_rings_tails_off+idx*2:transfer_rings_tails_off+idx*2+2])[0]
+def get_cr_head(idx):
+	return struct.unpack("<H", mapped_memory[completion_rings_heads_off+idx*2:completion_rings_heads_off+idx*2+2])[0]
+def get_cr_tail(idx):
+	return struct.unpack("<H", mapped_memory[completion_rings_tails_off+idx*2:completion_rings_tails_off+idx*2+2])[0]
+
+def set_tr_head(idx, val):
+	print(f"TR{idx} head -> {val}")
+	mapped_memory[transfer_rings_heads_off+idx*2:transfer_rings_heads_off+idx*2+2] = struct.pack("<H", val)
+def set_tr_tail(idx, val):
+	print(f"TR{idx} tail -> {val}")
+	mapped_memory[transfer_rings_tails_off+idx*2:transfer_rings_tails_off+idx*2+2] = struct.pack("<H", val)
+def set_cr_head(idx, val):
+	print(f"CR{idx} head -> {val}")
+	mapped_memory[completion_rings_heads_off+idx*2:completion_rings_heads_off+idx*2+2] = struct.pack("<H", val)
+def set_cr_tail(idx, val):
+	print(f"CR{idx} tail -> {val}")
+	mapped_memory[completion_rings_tails_off+idx*2:completion_rings_tails_off+idx*2+2] = struct.pack("<H", val)
 
 ctx = ContextStruct(
 	version=1,
@@ -409,10 +450,71 @@ ctx = ContextStruct(
 )
 ctx_ = struct.pack(CONTEXTSTRUCT_STR, *ctx)
 chexdump(ctx_)
+
+mapped_memory[context_off:context_off+CONTEXTSTRUCT_SZ] = ctx_
+barrier()
+
 irq_do_main_stuff=True
+mmiowrite32(RTI_WINDOW_LO, IOVA_START+context_off)
+mmiowrite32(RTI_WINDOW_HI, 0)
+mmiowrite32(RTI_WINDOW_SZ, SHARED_MEM_SZ)
+mmiowrite32(RTI_CONTEXT_LO, IOVA_START+context_off)
+mmiowrite32(RTI_CONTEXT_HI, 0)
 mmiowrite32(RTI_CONTROL, 2)
 
 py_irq_evt.wait()
 py_irq_evt.clear()
 print("Control is now 2")
+
+
+OpenCompletionRingMessage = namedtuple('OpenCompletionRingMessage', [
+    'msg_type',
+    'head_size',
+    'foot_size',
+    'pad_0x3_',
+    'cr_idx',
+    'cr_idx_',
+    'ring_iova',
+    'ring_count',
+    'unk_0x12_',
+    'pad_0x16_',
+    'msi',
+    'intmod_delay',
+    'intmod_bytes',
+    'accum_delay',
+    'accum_bytes',
+    'pad_0x2a_',
+])
+OPENCOMPLETIONRING_STR = "<BBB1sHHQHI6sHHIHI10s"
+
+completion_ring_1_off = roundto(ring0_iobuf_off + 0x34, 16)
+opencr = OpenCompletionRingMessage(
+	msg_type=2,
+	head_size=0,
+	foot_size=0,
+	pad_0x3_=b'\x00',
+	cr_idx=1,
+	cr_idx_=1,
+	ring_iova=IOVA_START+completion_ring_1_off,
+	ring_count=256,
+	unk_0x12_=0xffffffff,
+	pad_0x16_=b'\x00\x00\x00\x00\x00\x00',
+	msi=0,
+	intmod_delay=1000,
+	intmod_bytes=0xffffffff,
+	accum_delay=0,
+	accum_bytes=0,
+	pad_0x2a_=b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00',
+)
+opencr_ = struct.pack(OPENCOMPLETIONRING_STR, *opencr)
+chexdump(opencr_)
+
+mapped_memory[ring0_iobuf_off:ring0_iobuf_off+0x34] = opencr_
+mapped_memory[transfer_ring_0_off:transfer_ring_0_off+0x10] = \
+	struct.pack("<BBBBQBBBB", 0x01, 0x34, 0x00, 0x00, IOVA_START+ring0_iobuf_off, 0x00, 0x00, 0x00, 0x00)
+new_tr_head = (get_tr_head(0) + 1) % 128
+set_tr_head(0, new_tr_head)
+barrier()
+mmiowrite32(DOORBELL_05, new_tr_head << 16 | 0 << 8 | 0x20)
+
 
