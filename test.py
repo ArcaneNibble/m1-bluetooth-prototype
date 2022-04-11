@@ -264,8 +264,8 @@ def interrupt_handler():
 		py_irq_evt.set()
 
 		if irq_do_main_stuff:
-			print("dump per info")
-			chexdump(mapped_memory[per_info_off:per_info_off+PER_INFO_SZ])
+			# print("dump per info")
+			# chexdump(mapped_memory[per_info_off:per_info_off+PER_INFO_SZ])
 
 			for i in range(NUM_TRANSFER_RINGS):
 				print(f"TR{i} head {get_tr_head(i)} tail {get_tr_tail(i)}")
@@ -579,7 +579,7 @@ def send_transfer(pipe, data):
 		unk_0xe_=b'\x00\x00'
 	)
 	transfer_hdr_ = struct.pack(TRANSFERHEADER_STR, *transfer_hdr)
-	chexdump(transfer_hdr_)
+	# chexdump(transfer_hdr_)
 	mapped_memory[tr_off:tr_off+TRANSFERHEADER_SZ] = transfer_hdr_
 	new_tr_head = (tr_head + 1) % tr_ring_sz
 	set_tr_head(pipe, new_tr_head)
@@ -646,7 +646,7 @@ for i in range(1, 6):
 	)
 	print(opencr)
 	opencr_ = struct.pack(OPENCOMPLETIONRING_STR, *opencr)
-	chexdump(opencr_)
+	# chexdump(opencr_)
 	send_transfer(0, opencr_)
 
 prev_ring_info = completion_ring_infos[5]
@@ -667,7 +667,7 @@ openpipe = OpenPipeMessage(
 	pad_0x20_=b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00')
 print(openpipe)
 openpipe_ = struct.pack(OPENPIPE_STR, *openpipe)
-chexdump(openpipe_)
+# chexdump(openpipe_)
 send_transfer(0, openpipe_)
 transfer_ring_infos[1] = (pipe1_ring_off, 128, TRANSFERHEADER_SZ + 66*4)
 
@@ -687,7 +687,7 @@ openpipe = OpenPipeMessage(
 	pad_0x20_=b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00')
 print(openpipe)
 openpipe_ = struct.pack(OPENPIPE_STR, *openpipe)
-chexdump(openpipe_)
+# chexdump(openpipe_)
 send_transfer(0, openpipe_)
 transfer_ring_infos[2] = (0xdeadbeefdeadbeef, 128, TRANSFERHEADER_SZ)
 
