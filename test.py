@@ -7,6 +7,7 @@ import mmap
 import os
 import struct
 import time
+import threading
 
 
 VFIO_IOCTL_BASE = 0x3B64
@@ -19,6 +20,8 @@ VFIO_GROUP_GET_DEVICE_FD = VFIO_IOCTL_BASE + 6
 VFIO_DEVICE_GET_INFO = VFIO_IOCTL_BASE + 7
 VFIO_DEVICE_GET_REGION_INFO = VFIO_IOCTL_BASE + 8
 VFIO_DEVICE_GET_IRQ_INFO = VFIO_IOCTL_BASE + 9
+VFIO_DEVICE_SET_IRQS = VFIO_IOCTL_BASE + 10
+VFIO_DEVICE_RESET = VFIO_IOCTL_BASE + 11
 VFIO_IOMMU_GET_INFO = VFIO_IOCTL_BASE + 12
 VFIO_IOMMU_MAP_DMA = VFIO_IOCTL_BASE + 13
 
@@ -132,6 +135,8 @@ def cfgread32(off):
 def cfgwrite32(off, val):
     os.pwrite(device, struct.pack("<I", val), cfg_off+off)
 
+ioctl(device, VFIO_DEVICE_RESET, "")
+
 bar0 = libc_mmap(None, bar0_sz, mmap.PROT_READ | mmap.PROT_WRITE, mmap.MAP_SHARED, device, bar0_off)
 print(f"bar0 mapped at {bar0:016X}")
 bar1 = libc_mmap(None, bar1_sz, mmap.PROT_READ | mmap.PROT_WRITE, mmap.MAP_SHARED, device, bar1_off)
@@ -206,6 +211,22 @@ def divroundup(x, divisor):
 
 def roundto(x, round_to):
 	return round_to * divroundup(x, round_to)
+
+eventfd = libc.eventfd
+eventfd.argtypes = [c_uint, c_int]
+eventfd.restype = c_int
+irqfd = eventfd(0, 0)
+print(f"irq eventfd {irqfd}")
+
+def interrupt_handler():
+	while True:
+		events = struct.unpack("<Q", os.read(irqfd, 8))[0]
+		print(f"Got {events} interrupts!")
+irqthread = threading.Thread(target=interrupt_handler)
+irqthread.start()
+
+ioctl(device, VFIO_DEVICE_SET_IRQS, struct.pack("<IIIIII", 24, 0b100100, 1, 0, 1, irqfd))
+
 
 with open('BCM4387C2_19.3.395.4044_PCIE_macOS_MaldivesES2_CLPC_3ANT_OS_USI_20211013.bin', 'rb') as f:
 	firmware = f.read()
