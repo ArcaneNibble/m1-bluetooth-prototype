@@ -257,6 +257,9 @@ py_irq_evt = threading.Event()
 irq_do_main_stuff=False
 msg_irqs = {}
 
+completion_ring_infos = {}
+transfer_ring_infos = {}
+
 def interrupt_handler():
 	while True:
 		events = struct.unpack("<Q", os.read(irqfd, 8))[0]
@@ -367,6 +370,8 @@ print("Control is now 1")
 
 TransferHeader = namedtuple('TransferHeader', [
 	'flags',
+	# bit0 = has payload in buf_iova?
+	# bit1 = has payload in footer
 	'len_',
 	# XXX can length be 3 bytes?
 	'unk_0x3_',
@@ -380,7 +385,9 @@ TRANSFERHEADER_SZ = 0x10
 
 CompletionHeader = namedtuple('CompletionHeader', [
 	'flags',
+	# bit1 = has payload in footer
 	'unk_0x1',
+	# normally unk is 4
 	'pipe_idx',
 	'msg_id',
 	'len_',
@@ -541,14 +548,16 @@ OpenPipeMessage = namedtuple('OpenPipeMessage', [
     'completion_ring_index',
     'doorbell_idx',
     'flags',
+    # bit3 = oc
+    # bit4 = reliable
+    # bit7 = virtual (no ring_iova)
+    # bit8 = sync
     'pad_0x20_',
 ])
 OPENPIPE_STR = "<BBB1sHHQ8sHHHH20s"
 
 
-transfer_ring_infos = {
-	0: (transfer_ring_0_off, 128, TRANSFERHEADER_SZ)
-}
+transfer_ring_infos[0] = (transfer_ring_0_off, 128, TRANSFERHEADER_SZ)
 
 
 msg_id = 123
@@ -596,9 +605,7 @@ def send_transfer(pipe, data):
 	msg_id += 1
 
 
-completion_ring_infos = {
-	0: (completion_ring_0_off, 128, COMPLETIONHEADER_SZ)
-}
+completion_ring_infos[0] = (completion_ring_0_off, 128, COMPLETIONHEADER_SZ)
 
 for i in range(1, 6):
 	print(f"opening CR{i}")
