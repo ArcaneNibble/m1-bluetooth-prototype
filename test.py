@@ -107,13 +107,18 @@ libc_mmap = libc.mmap
 libc_mmap.argtypes = [c_void_p, c_size_t, c_int, c_int, c_int, c_longlong]
 libc_mmap.restype = c_void_p
 
-read32 = libglue.read32
-read32.argtypes = [c_void_p]
-read32.restype = c_uint
+# eww
+mmioread32 = libglue.read32
+mmioread32.argtypes = [c_void_p]
+mmioread32.restype = c_uint
 
-write32 = libglue.write32
-write32.argtypes = [c_void_p, c_uint]
-write32.restype = None
+mmiowrite32 = libglue.write32
+mmiowrite32.argtypes = [c_void_p, c_uint]
+mmiowrite32.restype = None
+
+barrier = libglue.barrier
+barrier.argtypes = []
+barrier.restype = None
 
 def cfgread16(off):
     return struct.unpack("<H", os.pread(device, 2, cfg_off+off))[0]
@@ -196,12 +201,6 @@ APBBRIDGECB0_ERROR_LO = bar0 + 0x590c
 APBBRIDGECB0_ERROR_HI = bar0 + 0x5910
 APBBRIDGECB0_ERROR_MASTER_ID = bar0 + 0x5914
 
-def copy_to_map(off, data):
-	assert len(data) % 4 == 0
-	for i in range(len(data) // 4):
-		x = struct.unpack("<I", data[i*4:(i+1)*4])[0]
-		write32(mapped_memory_addr+off+i*4, x)
-
 def divroundup(x, divisor):
 	return (x + divisor - 1) // divisor
 
@@ -212,35 +211,37 @@ with open('BCM4387C2_19.3.395.4044_PCIE_macOS_MaldivesES2_CLPC_3ANT_OS_USI_20211
 	firmware = f.read()
 
 fw_sz = len(firmware)
-copy_to_map(0, firmware + b'\x00' * (4 - len(firmware) % 4))
-# mapped_memory[:len(firmware)] = firmware
+mapped_memory[:len(firmware)] = firmware
 fw_sz_up = roundto(fw_sz, 0x200)
 print(f"fw size {fw_sz:x}")
 
-print(read32(BOOTSTAGE))
+# FIXME what is this
+time.sleep(1)
 
-write32(DOORBELL_7, 1)
-write32(BTI_MSI_LO, 0xfffff000)
-write32(BTI_MSI_HI, 0)
-write32(REG_24, 0x200)
-write32(REG_21, 0x100)
-write32(DOORBELL_7, 1)
-write32(BTI_MSI_LO, 0xfffff000)
-write32(BTI_MSI_HI, 0)
-write32(REG_24, 0x200)
-write32(REG_21, 0x100)
-write32(BTI_IMG_LO_RTI_HOST_LO, 0x2000000)
-write32(BTI_IMG_HI_RTI_HOST_HI, 0)
-write32(BAR1_IMG_ADDR_LO, 0x2000000)
-write32(BAR1_IMG_ADDR_HI, 0)
-write32(BTI_IMG_SZ_RTI_HOST_SZ, fw_sz_up)
-write32(REG_21, 0x200)
-write32(BAR1_IMG_SZ, fw_sz)
+print(mmioread32(BOOTSTAGE))
 
-print(read32(BOOTSTAGE))
-write32(IMG_DOORBELL, 0)
-print(read32(BOOTSTAGE))
+mmiowrite32(DOORBELL_7, 1)
+mmiowrite32(BTI_MSI_LO, 0xfffff000)
+mmiowrite32(BTI_MSI_HI, 0)
+mmiowrite32(REG_24, 0x200)
+mmiowrite32(REG_21, 0x100)
+mmiowrite32(DOORBELL_7, 1)
+mmiowrite32(BTI_MSI_LO, 0xfffff000)
+mmiowrite32(BTI_MSI_HI, 0)
+mmiowrite32(REG_24, 0x200)
+mmiowrite32(REG_21, 0x100)
+mmiowrite32(BTI_IMG_LO_RTI_HOST_LO, 0x2000000)
+mmiowrite32(BTI_IMG_HI_RTI_HOST_HI, 0)
+mmiowrite32(BAR1_IMG_ADDR_LO, 0x2000000)
+mmiowrite32(BAR1_IMG_ADDR_HI, 0)
+mmiowrite32(BTI_IMG_SZ_RTI_HOST_SZ, fw_sz_up)
+mmiowrite32(REG_21, 0x200)
+mmiowrite32(BAR1_IMG_SZ, fw_sz)
+
+print(mmioread32(BOOTSTAGE))
+mmiowrite32(IMG_DOORBELL, 0)
+print(mmioread32(BOOTSTAGE))
 
 time.sleep(1)
-print(read32(BOOTSTAGE))
+print(mmioread32(BOOTSTAGE))
 
