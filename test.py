@@ -255,6 +255,7 @@ print(f"irq eventfd {irqfd}")
 
 py_irq_evt = threading.Event()
 irq_do_main_stuff=False
+irq_do_magic=False
 msg_irqs = {}
 
 completion_ring_infos = {}
@@ -297,10 +298,16 @@ def interrupt_handler():
 						payload = data[COMPLETIONHEADER_SZ:COMPLETIONHEADER_SZ+hdr.len_]
 						chexdump(payload)
 
-					if hdr.msg_id in msg_irqs:
-						msg_irqs[hdr.msg_id].set()
+					if (hdr.pipe_idx, hdr.msg_id) in msg_irqs:
+						msg_irqs[(hdr.pipe_idx, hdr.msg_id)].set()
 
 					set_cr_tail(cr_idx, (cr_ent_idx + 1) % cr_ring_sz)
+
+					if irq_do_magic:
+						if hdr.pipe_idx == 2:
+							# HCI in
+							print("HCI in")
+							boop_cr(cr_idx, hdr.pipe_idx)
 
 irqthread = threading.Thread(target=interrupt_handler)
 irqthread.start()
@@ -595,13 +602,13 @@ def send_transfer(pipe, data):
 	barrier()
 
 	evt = threading.Event()
-	msg_irqs[msg_id] = evt
+	msg_irqs[(pipe, msg_id)] = evt
 
 	mmiowrite32(DOORBELL_05, new_tr_head << 16 | pipe << 8 | 0x20)
 
 	evt.wait()
 	del evt
-	del msg_irqs[msg_id]
+	del msg_irqs[(pipe, msg_id)]
 	msg_id += 1
 
 
@@ -698,6 +705,14 @@ openpipe_ = struct.pack(OPENPIPE_STR, *openpipe)
 send_transfer(0, openpipe_)
 transfer_ring_infos[2] = (0xdeadbeefdeadbeef, 128, TRANSFERHEADER_SZ)
 
+def boop_cr(cr_idx, pipe):
+	cr_head = get_cr_head(cr_idx)
+	new_cr_head = (cr_head + 1) % completion_ring_infos[cr_idx][1]
+
+	# XXX pipe? cr index? shared rings? tbd
+	mmiowrite32(DOORBELL_05, new_cr_head << 16 | pipe << 8 | 0x20)
+
+
 def recv_from_pipe(pipe):
 	if pipe == 1:
 		cr_idx = 1
@@ -708,9 +723,50 @@ def recv_from_pipe(pipe):
 
 	cr_head = get_cr_head(cr_idx)
 	new_cr_head = (cr_head + 1) % completion_ring_infos[cr_idx][1]
-	set_cr_head(cr_idx, new_cr_head)
-	barrier()
+
+	evt = threading.Event()
+	msg_irqs[(pipe, cr_head)] = evt
 
 	# XXX pipe? cr index? shared rings? tbd
 	mmiowrite32(DOORBELL_05, new_cr_head << 16 | pipe << 8 | 0x20)
+
+	evt.wait()
+	del evt
+	del msg_irqs[(pipe, cr_head)]
+
+# BLOB
+with open('bluetooth-taurus-calibration-bf.bin', 'rb') as f:
+	cal_blob = f.read()
+
+remaining_count = divroundup(len(cal_blob), 0xe6) - 1
+for chunk_off in range(0, len(cal_blob), 0xe6):
+	blob_chunk = cal_blob[chunk_off:chunk_off+0xe6]
+	if len(blob_chunk) != 0xe6:
+		blob_chunk += b'\x00' * (0xe6 - len(blob_chunk))
+	command = struct.pack("<HBBH", 0xfd97, 0xe9, 0x03, remaining_count) + blob_chunk
+	send_transfer(1, command)
+	recv_from_pipe(2)
+	remaining_count -=1
+assert remaining_count == -1
+
+# PTB
+with open('BCM4387C2_DVT_Finalv1_PCIE_macOS_MaldivesES2_CLPC_3ANT_OS_USI_K_R_20210723.ptb', 'rb') as f:
+	ptb_blob = f.read()
+
+remaining_count = divroundup(len(ptb_blob), 0xcf) - 1
+for chunk_off in range(0, len(ptb_blob), 0xcf):
+	blob_chunk = ptb_blob[chunk_off:chunk_off+0xcf]
+	if len(blob_chunk) != 0xcf:
+		blob_chunk += b'\x00' * (0xcf - len(blob_chunk))
+	command = struct.pack("<HBH", 0xfe0d, 0xd1, remaining_count) + blob_chunk
+	send_transfer(1, command)
+	recv_from_pipe(2)
+	remaining_count -=1
+assert remaining_count == -1
+
+# reset
+send_transfer(1, b'\x03\x0c\x00')
+recv_from_pipe(2)
+
+irq_do_magic = True
 
