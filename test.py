@@ -294,6 +294,7 @@ def interrupt_handler():
 					# chexdump(data)
 					hdr = CompletionHeader._make(struct.unpack(COMPLETIONHEADER_STR, data[:COMPLETIONHEADER_SZ]))
 					print(hdr)
+					payload = b''
 					if hdr.flags & 2:
 						payload = data[COMPLETIONHEADER_SZ:COMPLETIONHEADER_SZ+hdr.len_]
 						chexdump(payload)
@@ -308,6 +309,7 @@ def interrupt_handler():
 							# HCI in
 							print("HCI in")
 							boop_cr(cr_idx, hdr.pipe_idx)
+							os.write(vhci_fd, b'\x04' + payload)
 
 irqthread = threading.Thread(target=interrupt_handler)
 irqthread.start()
@@ -568,7 +570,7 @@ transfer_ring_infos[0] = (transfer_ring_0_off, 128, TRANSFERHEADER_SZ)
 
 
 msg_id = 123
-def send_transfer(pipe, data):
+def send_transfer(pipe, data, wait=True):
 	global msg_id
 
 	tr_base, tr_ring_sz, tr_ent_sz = transfer_ring_infos[pipe]
@@ -601,14 +603,16 @@ def send_transfer(pipe, data):
 	set_tr_head(pipe, new_tr_head)
 	barrier()
 
-	evt = threading.Event()
-	msg_irqs[(pipe, msg_id)] = evt
+	if wait:
+		evt = threading.Event()
+		msg_irqs[(pipe, msg_id)] = evt
 
 	mmiowrite32(DOORBELL_05, new_tr_head << 16 | pipe << 8 | 0x20)
 
-	evt.wait()
-	del evt
-	del msg_irqs[(pipe, msg_id)]
+	if wait:
+		evt.wait()
+		del evt
+		del msg_irqs[(pipe, msg_id)]
 	msg_id += 1
 
 
@@ -768,5 +772,20 @@ assert remaining_count == -1
 send_transfer(1, b'\x03\x0c\x00')
 recv_from_pipe(2)
 
+vhci_fd = os.open('/dev/vhci', os.O_RDWR)
+# os.write(vhci_fd, b'\xff\x00')
+
+boop_cr(2, 2)
 irq_do_magic = True
+
+while True:
+	vhci_packet = os.read(vhci_fd, 1024)
+	chexdump(vhci_packet)
+	if vhci_packet[0] == 0x01:
+		print("HCI out")
+		send_transfer(1, vhci_packet[1:], False)
+	elif vhci_packet[0] == 0xff:
+		print("vendor command")
+	else:
+		print("UNKNOWN VHCI command")
 
