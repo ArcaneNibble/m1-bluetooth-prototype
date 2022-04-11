@@ -158,12 +158,14 @@ if reset_thing & 0x80000 == 0:
 cfgwrite32(0x88, reset_thing | 0x10000)
 
 # dunno how much we need or anything
-# mapped_memory = libc_mmap(None, 0x2000000, mmap.PROT_READ | mmap.PROT_WRITE, mmap.MAP_PRIVATE | mmap.MAP_ANONYMOUS, 0, 0)
-mapped_memory = mmap.mmap(-1, 0x2000000, flags=mmap.MAP_PRIVATE | mmap.MAP_ANONYMOUS, prot=mmap.PROT_READ | mmap.PROT_WRITE)
+# dunno if dart limit is lower limit of iova or size limit
+IOVA_START = 0x2000000
+SHARED_MEM_SZ = 0x2000000
+
+mapped_memory = mmap.mmap(-1, SHARED_MEM_SZ, flags=mmap.MAP_PRIVATE | mmap.MAP_ANONYMOUS, prot=mmap.PROT_READ | mmap.PROT_WRITE)
 mapped_memory_addr = addressof(c_char.from_buffer(mapped_memory))
 print(f"memory region at {mapped_memory_addr:016X}")
-# dunno if dart limit is lower limit of iova or size limit
-ioctl(container, VFIO_IOMMU_MAP_DMA, struct.pack("<IIQQQ", 32, 3, mapped_memory_addr, 0x2000000, 0x2000000))
+ioctl(container, VFIO_IOMMU_MAP_DMA, struct.pack("<IIQQQ", 32, 3, mapped_memory_addr, IOVA_START, SHARED_MEM_SZ))
 
 REG_0 = bar1 + 0x20044c
 RTI_GET_CAPABILITY = bar1 + 0x200450
@@ -191,9 +193,9 @@ REG_21 = bar0 + 0x610
 BTI_MSI_LO = bar0 + 0x580
 BTI_MSI_HI = bar0 + 0x584
 REG_24 = bar0 + 0x588
-BTI_IMG_LO_RTI_HOST_LO = bar0 + 0x590
-BTI_IMG_HI_RTI_HOST_HI = bar0 + 0x594
-BTI_IMG_SZ_RTI_HOST_SZ = bar0 + 0x598
+HOST_WINDOW_LO = bar0 + 0x590
+HOST_WINDOW_HI = bar0 + 0x594
+HOST_WINDOW_SZ = bar0 + 0x598
 RTI_IMG_LO = bar0 + 0x5a0
 RTI_IMG_HI = bar0 + 0x5a4
 RTI_IMG_SZ = bar0 + 0x5a8
@@ -218,10 +220,13 @@ eventfd.restype = c_int
 irqfd = eventfd(0, 0)
 print(f"irq eventfd {irqfd}")
 
+py_irq_evt = threading.Event()
+
 def interrupt_handler():
 	while True:
 		events = struct.unpack("<Q", os.read(irqfd, 8))[0]
 		print(f"Got {events} interrupts!")
+		py_irq_evt.set()
 irqthread = threading.Thread(target=interrupt_handler)
 irqthread.start()
 
@@ -251,11 +256,11 @@ mmiowrite32(BTI_MSI_LO, 0xfffff000)
 mmiowrite32(BTI_MSI_HI, 0)
 mmiowrite32(REG_24, 0x200)
 mmiowrite32(REG_21, 0x100)
-mmiowrite32(BTI_IMG_LO_RTI_HOST_LO, 0x2000000)
-mmiowrite32(BTI_IMG_HI_RTI_HOST_HI, 0)
-mmiowrite32(BAR1_IMG_ADDR_LO, 0x2000000)
+mmiowrite32(HOST_WINDOW_LO, IOVA_START)
+mmiowrite32(HOST_WINDOW_HI, 0)
+mmiowrite32(BAR1_IMG_ADDR_LO, IOVA_START)
 mmiowrite32(BAR1_IMG_ADDR_HI, 0)
-mmiowrite32(BTI_IMG_SZ_RTI_HOST_SZ, fw_sz_up)
+mmiowrite32(HOST_WINDOW_SZ, fw_sz_up)
 mmiowrite32(REG_21, 0x200)
 mmiowrite32(BAR1_IMG_SZ, fw_sz)
 
@@ -263,6 +268,23 @@ print(mmioread32(BOOTSTAGE))
 mmiowrite32(IMG_DOORBELL, 0)
 print(mmioread32(BOOTSTAGE))
 
-time.sleep(1)
+
+py_irq_evt.wait()
+py_irq_evt.clear()
 print(mmioread32(BOOTSTAGE))
+print(mmioread32(RTI_GET_CAPABILITY))
+
+mmiowrite32(REG_21, 0x100)
+mmiowrite32(RTI_MSI_LO, 0xfffff000)
+mmiowrite32(RTI_MSI_HI, 0)
+mmiowrite32(RTI_MSI_DATA, 0)
+mmiowrite32(HOST_WINDOW_LO, IOVA_START)
+mmiowrite32(HOST_WINDOW_HI, 0)
+mmiowrite32(HOST_WINDOW_SZ, SHARED_MEM_SZ)
+mmiowrite32(REG_21, 0x200)
+mmiowrite32(RTI_CONTROL, 1)
+
+py_irq_evt.wait()
+py_irq_evt.clear()
+print("Control is now 1")
 
