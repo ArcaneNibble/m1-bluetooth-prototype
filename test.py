@@ -273,11 +273,11 @@ def interrupt_handler():
 				print(f"CR{i} head {get_cr_head(i)} tail {get_cr_tail(i)}")
 
 			for cr_idx in range(NUM_COMPLETION_RINGS):
+				if cr_idx not in completion_ring_infos:
+					continue
 				cr_head = get_cr_head(cr_idx)
 				cr_tail = get_cr_tail(cr_idx)
-				cr_off = completion_ring_0_off
-				cr_ent_sz = 0x10	# FIXME
-				cr_ring_sz = 128
+				cr_off, cr_ring_sz, cr_ent_sz = completion_ring_infos[cr_idx]
 
 				if cr_head >= cr_tail:
 					range_ = range(cr_tail, cr_head)
@@ -529,29 +529,6 @@ OpenCompletionRingMessage = namedtuple('OpenCompletionRingMessage', [
 OPENCOMPLETIONRING_STR = "<BBB1sHHQHI6sHHIHI10s"
 
 
-completion_ring_1_off = roundto(ring0_iobuf_off + 0x34, 16)
-opencr = OpenCompletionRingMessage(
-	msg_type=2,
-	head_size=0,
-	foot_size=0,
-	pad_0x3_=b'\x00',
-	cr_idx=1,
-	cr_idx_=1,
-	ring_iova=IOVA_START+completion_ring_1_off,
-	ring_count=256,
-	unk_0x12_=0xffffffff,
-	pad_0x16_=b'\x00\x00\x00\x00\x00\x00',
-	msi=0,
-	intmod_delay=1000,
-	intmod_bytes=0xffffffff,
-	accum_delay=0,
-	accum_bytes=0,
-	pad_0x2a_=b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00',
-)
-opencr_ = struct.pack(OPENCOMPLETIONRING_STR, *opencr)
-chexdump(opencr_)
-
-
 msg_id = 123
 def send_transfer(pipe, data):
 	global msg_id
@@ -598,4 +575,58 @@ def send_transfer(pipe, data):
 	del evt
 	del msg_irqs[msg_id]
 	msg_id += 1
+	
+	
+completion_ring_infos = {
+	0: (completion_ring_0_off, 128, COMPLETIONHEADER_SZ)
+}
+
+for i in range(1, 6):
+	print(f"opening CR{i}")
+	if i == 1:
+		ring_off = roundto(ring0_iobuf_off + 0x34, 16)
+	else:
+		prev_ring_info = completion_ring_infos[i-1]
+		ring_off = roundto(prev_ring_info[0] + prev_ring_info[1] * prev_ring_info[2], 16)
+	
+	if i == 1 or i == 2:
+		ring_ents = 256
+	else:
+		ring_ents = 128
+	
+	if i == 1 or i == 3:
+		foot_sz = 0
+	else:
+		foot_sz = 66
+	ring_ent_sz = COMPLETIONHEADER_SZ + foot_sz*4
+	
+	if i == 1 or i == 2:
+		intmod_delay = 1000
+	else:
+		intmod_delay = 0
+	
+	completion_ring_infos[i] = (ring_off, ring_ents, ring_ent_sz)
+
+	opencr = OpenCompletionRingMessage(
+		msg_type=2,
+		head_size=0,
+		foot_size=foot_sz,
+		pad_0x3_=b'\x00',
+		cr_idx=i,
+		cr_idx_=i,
+		ring_iova=IOVA_START+ring_off,
+		ring_count=ring_ents,
+		unk_0x12_=0xffffffff,
+		pad_0x16_=b'\x00\x00\x00\x00\x00\x00',
+		msi=0,
+		intmod_delay=intmod_delay,
+		intmod_bytes=0xffffffff,
+		accum_delay=0,
+		accum_bytes=0,
+		pad_0x2a_=b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00',
+	)
+	print(opencr)
+	opencr_ = struct.pack(OPENCOMPLETIONRING_STR, *opencr)
+	chexdump(opencr_)
+	send_transfer(0, opencr_)
 
