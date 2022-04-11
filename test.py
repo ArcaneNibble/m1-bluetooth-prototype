@@ -255,6 +255,7 @@ print(f"irq eventfd {irqfd}")
 
 py_irq_evt = threading.Event()
 irq_do_main_stuff=False
+msg_irqs = {}
 
 def interrupt_handler():
 	while True:
@@ -293,6 +294,8 @@ def interrupt_handler():
 						payload = data[COMPLETIONHEADER_SZ:COMPLETIONHEADER_SZ+hdr.len_]
 						chexdump(payload)
 
+					if hdr.msg_id in msg_irqs:
+						msg_irqs[hdr.msg_id].set()
 
 					set_cr_tail(cr_idx, (cr_ent_idx + 1) % cr_ring_sz)
 
@@ -579,17 +582,20 @@ def send_transfer(pipe, data):
 		msg_id=msg_id,
 		unk_0xe_=b'\x00\x00'
 	)
-	msg_id += 1
 	transfer_hdr_ = struct.pack(TRANSFERHEADER_STR, *transfer_hdr)
 	chexdump(transfer_hdr_)
 	mapped_memory[tr_off:tr_off+TRANSFERHEADER_SZ] = transfer_hdr_
 	new_tr_head = (tr_head + 1) % tr_ring_sz
 	set_tr_head(pipe, new_tr_head)
 	barrier()
+
+	evt = threading.Event()
+	msg_irqs[msg_id] = evt
+
 	mmiowrite32(DOORBELL_05, new_tr_head << 16 | pipe << 8 | 0x20)
 
-	# XXX
-	py_irq_evt.wait()
-	py_irq_evt.clear()
-
+	evt.wait()
+	del evt
+	del msg_irqs[msg_id]
+	msg_id += 1
 
