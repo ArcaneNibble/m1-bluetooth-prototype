@@ -356,6 +356,19 @@ print("Control is now 1")
 
 
 
+TransferHeader = namedtuple('TransferHeader', [
+	'flags',
+	'len_',
+	# XXX can length be 3 bytes?
+	'unk_0x3_',
+	'buf_iova',
+	'msg_id',
+	# XXX macos driver takes special effort to munge byte 0xf
+	'unk_0xe_',
+])
+TRANSFERHEADER_STR = "<BH1sQH2s"
+TRANSFERHEADER_SZ = 0x10
+
 CompletionHeader = namedtuple('CompletionHeader', [
 	'flags',
 	'unk_0x1',
@@ -364,7 +377,7 @@ CompletionHeader = namedtuple('CompletionHeader', [
 	'len_',
 	'pad_0xa_',
 ])
-COMPLETIONHEADER_STR = "<BBHHI6s"
+COMPLETIONHEADER_STR = "<B1sHHI6s"
 COMPLETIONHEADER_SZ = 0x10
 
 
@@ -413,7 +426,7 @@ transfer_rings_tails_off = transfer_rings_heads_off + NUM_TRANSFER_RINGS*2
 completion_rings_heads_off = transfer_rings_tails_off + NUM_TRANSFER_RINGS*2
 completion_rings_tails_off = completion_rings_heads_off + NUM_COMPLETION_RINGS*2
 transfer_ring_0_off = roundto(completion_rings_tails_off + NUM_COMPLETION_RINGS*2, 16)
-completion_ring_0_off = roundto(transfer_ring_0_off + 0x10 * 128, 16)
+completion_ring_0_off = roundto(transfer_ring_0_off + TRANSFERHEADER_SZ * 128, 16)
 ring0_iobuf_off = roundto(completion_ring_0_off + COMPLETIONHEADER_SZ * 128, 16)
 
 def get_tr_head(idx):
@@ -530,11 +543,20 @@ opencr_ = struct.pack(OPENCOMPLETIONRING_STR, *opencr)
 chexdump(opencr_)
 
 mapped_memory[ring0_iobuf_off:ring0_iobuf_off+0x34] = opencr_
-mapped_memory[transfer_ring_0_off:transfer_ring_0_off+0x10] = \
-	struct.pack("<BBBBQBBBB", 0x01, 0x34, 0x00, 0x00, IOVA_START+ring0_iobuf_off, 0x34, 0x12, 0x1, 0x00)
+transfer_hdr = TransferHeader(
+	flags=1,
+	len_=0x34,
+	unk_0x3_=b'\x00',
+	buf_iova=IOVA_START+ring0_iobuf_off,
+	msg_id=0,
+	unk_0xe_=b'\x00\x00'
+)
+mapped_memory[transfer_ring_0_off:transfer_ring_0_off+TRANSFERHEADER_SZ] = struct.pack(TRANSFERHEADER_STR, *transfer_hdr)
 new_tr_head = (get_tr_head(0) + 1) % 128
 set_tr_head(0, new_tr_head)
 barrier()
 mmiowrite32(DOORBELL_05, new_tr_head << 16 | 0 << 8 | 0x20)
 
+py_irq_evt.wait()
+py_irq_evt.clear()
 
