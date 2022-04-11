@@ -4,6 +4,7 @@ import array
 from collections import namedtuple
 from ctypes import *
 from fcntl import ioctl
+import itertools
 import mmap
 import os
 import struct
@@ -277,7 +278,12 @@ def interrupt_handler():
 				cr_ent_sz = 0x10	# FIXME
 				cr_ring_sz = 128
 
-				for cr_ent_idx in range(cr_tail, cr_head):
+				if cr_head >= cr_tail:
+					range_ = range(cr_tail, cr_head)
+				else:
+					range_ = itertools.chain(range(cr_tail, cr_ring_sz), range(0, cr_head))
+
+				for cr_ent_idx in range_:
 					data = mapped_memory[cr_off+cr_ent_idx*cr_ent_sz:cr_off+(cr_ent_idx+1)*cr_ent_sz]
 					print(f"Data on CR{cr_idx}")
 					# chexdump(data)
