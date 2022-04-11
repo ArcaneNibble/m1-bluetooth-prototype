@@ -542,21 +542,48 @@ opencr = OpenCompletionRingMessage(
 opencr_ = struct.pack(OPENCOMPLETIONRING_STR, *opencr)
 chexdump(opencr_)
 
-mapped_memory[ring0_iobuf_off:ring0_iobuf_off+0x34] = opencr_
-transfer_hdr = TransferHeader(
-	flags=1,
-	len_=0x34,
-	unk_0x3_=b'\x00',
-	buf_iova=IOVA_START+ring0_iobuf_off,
-	msg_id=0,
-	unk_0xe_=b'\x00\x00'
-)
-mapped_memory[transfer_ring_0_off:transfer_ring_0_off+TRANSFERHEADER_SZ] = struct.pack(TRANSFERHEADER_STR, *transfer_hdr)
-new_tr_head = (get_tr_head(0) + 1) % 128
-set_tr_head(0, new_tr_head)
-barrier()
-mmiowrite32(DOORBELL_05, new_tr_head << 16 | 0 << 8 | 0x20)
 
-py_irq_evt.wait()
-py_irq_evt.clear()
+msg_id = 123
+def send_transfer(pipe, data):
+	global msg_id
+
+	tr_base = transfer_ring_0_off
+	tr_ent_sz = 0x10	# FIXME
+	tr_ring_sz = 128
+
+	tr_head = get_tr_head(pipe)
+	tr_off = tr_base + tr_head*tr_ent_sz
+	xfer_iova = 0
+	flags = 0
+	if pipe == 0:
+		assert len(data) == 0x34
+		mapped_memory[ring0_iobuf_off:ring0_iobuf_off+len(data)] = data
+		xfer_iova = IOVA_START+ring0_iobuf_off
+		flags = 1
+	else:
+		flags = 2
+		...
+
+
+	transfer_hdr = TransferHeader(
+		flags=flags,
+		len_=len(data),
+		unk_0x3_=b'\x00',
+		buf_iova=xfer_iova,
+		msg_id=msg_id,
+		unk_0xe_=b'\x00\x00'
+	)
+	msg_id += 1
+	transfer_hdr_ = struct.pack(TRANSFERHEADER_STR, *transfer_hdr)
+	chexdump(transfer_hdr_)
+	mapped_memory[tr_off:tr_off+TRANSFERHEADER_SZ] = transfer_hdr_
+	new_tr_head = (tr_head + 1) % tr_ring_sz
+	set_tr_head(pipe, new_tr_head)
+	barrier()
+	mmiowrite32(DOORBELL_05, new_tr_head << 16 | pipe << 8 | 0x20)
+
+	# XXX
+	py_irq_evt.wait()
+	py_irq_evt.clear()
+
 
