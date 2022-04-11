@@ -528,28 +528,47 @@ OpenCompletionRingMessage = namedtuple('OpenCompletionRingMessage', [
 ])
 OPENCOMPLETIONRING_STR = "<BBB1sHHQHI6sHHIHI10s"
 
+OpenPipeMessage = namedtuple('OpenPipeMessage', [
+    'msg_type',
+    'head_size',
+    'foot_size',
+    'pad_0x3_',
+    'pipe_idx',
+    'pipe_idx_',
+    'ring_iova',
+    'pad_0x10_',
+    'ring_count',
+    'completion_ring_index',
+    'doorbell_idx',
+    'flags',
+    'pad_0x20_',
+])
+OPENPIPE_STR = "<BBB1sHHQ8sHHHH20s"
+
+
+transfer_ring_infos = {
+	0: (transfer_ring_0_off, 128, TRANSFERHEADER_SZ)
+}
+
 
 msg_id = 123
 def send_transfer(pipe, data):
 	global msg_id
 
-	tr_base = transfer_ring_0_off
-	tr_ent_sz = 0x10	# FIXME
-	tr_ring_sz = 128
+	tr_base, tr_ring_sz, tr_ent_sz = transfer_ring_infos[pipe]
 
 	tr_head = get_tr_head(pipe)
 	tr_off = tr_base + tr_head*tr_ent_sz
-	xfer_iova = 0
-	flags = 0
 	if pipe == 0:
 		assert len(data) == 0x34
 		mapped_memory[ring0_iobuf_off:ring0_iobuf_off+len(data)] = data
 		xfer_iova = IOVA_START+ring0_iobuf_off
 		flags = 1
 	else:
+		assert len(data) <= tr_ent_sz - TRANSFERHEADER_SZ
+		mapped_memory[tr_off+TRANSFERHEADER_SZ:tr_off+TRANSFERHEADER_SZ+len(data)] = data
+		xfer_iova = 0
 		flags = 2
-		...
-
 
 	transfer_hdr = TransferHeader(
 		flags=flags,
@@ -575,8 +594,8 @@ def send_transfer(pipe, data):
 	del evt
 	del msg_irqs[msg_id]
 	msg_id += 1
-	
-	
+
+
 completion_ring_infos = {
 	0: (completion_ring_0_off, 128, COMPLETIONHEADER_SZ)
 }
@@ -588,23 +607,23 @@ for i in range(1, 6):
 	else:
 		prev_ring_info = completion_ring_infos[i-1]
 		ring_off = roundto(prev_ring_info[0] + prev_ring_info[1] * prev_ring_info[2], 16)
-	
+
 	if i == 1 or i == 2:
 		ring_ents = 256
 	else:
 		ring_ents = 128
-	
+
 	if i == 1 or i == 3:
 		foot_sz = 0
 	else:
 		foot_sz = 66
 	ring_ent_sz = COMPLETIONHEADER_SZ + foot_sz*4
-	
+
 	if i == 1 or i == 2:
 		intmod_delay = 1000
 	else:
 		intmod_delay = 0
-	
+
 	completion_ring_infos[i] = (ring_off, ring_ents, ring_ent_sz)
 
 	opencr = OpenCompletionRingMessage(
@@ -629,4 +648,62 @@ for i in range(1, 6):
 	opencr_ = struct.pack(OPENCOMPLETIONRING_STR, *opencr)
 	chexdump(opencr_)
 	send_transfer(0, opencr_)
+
+prev_ring_info = completion_ring_infos[5]
+pipe1_ring_off = roundto(prev_ring_info[0] + prev_ring_info[1] * prev_ring_info[2], 16)
+openpipe = OpenPipeMessage(
+	msg_type=1,
+	head_size=0,
+	foot_size=66,
+	pad_0x3_=b'\x00',
+	pipe_idx=1,
+	pipe_idx_=1,
+	ring_iova=IOVA_START+pipe1_ring_off,
+	pad_0x10_=b'\x00\x00\x00\x00\x00\x00\x00\x00',
+	ring_count=128,
+	completion_ring_index=1,
+	doorbell_idx=1,
+	flags=0,
+	pad_0x20_=b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00')
+print(openpipe)
+openpipe_ = struct.pack(OPENPIPE_STR, *openpipe)
+chexdump(openpipe_)
+send_transfer(0, openpipe_)
+transfer_ring_infos[1] = (pipe1_ring_off, 128, TRANSFERHEADER_SZ + 66*4)
+
+openpipe = OpenPipeMessage(
+	msg_type=1,
+	head_size=0,
+	foot_size=0,
+	pad_0x3_=b'\x00',
+	pipe_idx=2,
+	pipe_idx_=2,
+	ring_iova=0,
+	pad_0x10_=b'\x00\x00\x00\x00\x00\x00\x00\x00',
+	ring_count=128,
+	completion_ring_index=2,
+	doorbell_idx=2,
+	flags=0x80,
+	pad_0x20_=b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00')
+print(openpipe)
+openpipe_ = struct.pack(OPENPIPE_STR, *openpipe)
+chexdump(openpipe_)
+send_transfer(0, openpipe_)
+transfer_ring_infos[2] = (0xdeadbeefdeadbeef, 128, TRANSFERHEADER_SZ)
+
+def recv_from_pipe(pipe):
+	if pipe == 1:
+		cr_idx = 1
+	elif pipe == 2:
+		cr_idx = 2
+	else:
+		assert False
+
+	cr_head = get_cr_head(cr_idx)
+	new_cr_head = (cr_head + 1) % completion_ring_infos[cr_idx][1]
+	set_cr_head(cr_idx, new_cr_head)
+	barrier()
+
+	# XXX pipe? cr index? shared rings? tbd
+	mmiowrite32(DOORBELL_05, new_cr_head << 16 | pipe << 8 | 0x20)
 
