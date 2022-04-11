@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import array
+from collections import namedtuple
 from ctypes import *
 from fcntl import ioctl
 import mmap
@@ -8,6 +9,37 @@ import os
 import struct
 import time
 import threading
+
+
+def _ascii(s):
+    s2 = ""
+    for c in s:
+        if c < 0x20 or c > 0x7e:
+            s2 += "."
+        else:
+            s2 += chr(c)
+    return s2
+
+def hexdump(s, sep=" "):
+    return sep.join(["%02x"%x for x in s])
+
+def chexdump(s, st=0, abbreviate=True, indent="", print_fn=print):
+    last = None
+    skip = False
+    for i in range(0,len(s),16):
+        val = s[i:i+16]
+        if val == last and abbreviate:
+            if not skip:
+                print_fn(indent+"%08x  *" % (i + st))
+                skip = True
+        else:
+            print_fn(indent+"%08x  %s  %s  |%s|" % (
+                  i + st,
+                  hexdump(val[:8], ' ').ljust(23),
+                  hexdump(val[8:], ' ').ljust(23),
+                  _ascii(val).ljust(16)))
+            last = val
+            skip = False
 
 
 VFIO_IOCTL_BASE = 0x3B64
@@ -221,12 +253,18 @@ irqfd = eventfd(0, 0)
 print(f"irq eventfd {irqfd}")
 
 py_irq_evt = threading.Event()
+irq_do_main_stuff=False
 
 def interrupt_handler():
 	while True:
 		events = struct.unpack("<Q", os.read(irqfd, 8))[0]
 		print(f"Got {events} interrupts!")
 		py_irq_evt.set()
+
+		if irq_do_main_stuff:
+			print("dump per info")
+			chexdump(mapped_memory[per_info_off:per_info_off+PER_INFO_SZ])
+
 irqthread = threading.Thread(target=interrupt_handler)
 irqthread.start()
 
@@ -274,6 +312,9 @@ py_irq_evt.clear()
 print(mmioread32(BOOTSTAGE))
 print(mmioread32(RTI_GET_CAPABILITY))
 
+for i in range(len(mapped_memory)):
+	mapped_memory[i] = 0
+
 mmiowrite32(REG_21, 0x100)
 mmiowrite32(RTI_MSI_LO, 0xfffff000)
 mmiowrite32(RTI_MSI_HI, 0)
@@ -287,4 +328,91 @@ mmiowrite32(RTI_CONTROL, 1)
 py_irq_evt.wait()
 py_irq_evt.clear()
 print("Control is now 1")
+
+
+
+ContextStruct = namedtuple('ContextStruct', [
+    'version',
+    'sz',
+    'enabled_caps',
+    'perInfo',
+    'crHIA',
+    'trTIA',
+    'crTIA',
+    'trHIA',
+    'crIAEntry',
+    'trIAEntry',
+    'mcr',
+    'mtr',
+    'mtrEntry',
+    'mcrEntry',
+    'mtrDb',
+    'mcrDb',
+    'mtrMsi',
+    'mcrMsi',
+    'mtrOptHeadSize',
+    'mtrOptFootSize',
+    'mcrOptHeadSize',
+    'mcrOptFootSize',
+    'res_inPlaceComp_oOOComp',
+    'piMsi',
+    'scratchPa',
+    'scratchSize',
+    'res',
+])
+CONTEXTSTRUCT_STR = "<HHIQQQQQHHQQHHHHHHBBBBHHQII"
+CONTEXTSTRUCT_SZ = 0x68
+
+PER_INFO_SZ = 0x10
+
+
+NUM_TRANSFER_RINGS = 9
+NUM_COMPLETION_RINGS = 6
+
+context_off = 0
+per_info_off = roundto(context_off + CONTEXTSTRUCT_SZ, 16)
+transfer_rings_heads_off = roundto(per_info_off + PER_INFO_SZ, 16)
+transfer_rings_tails_off = transfer_rings_heads_off + NUM_TRANSFER_RINGS*2
+completion_rings_heads_off = transfer_rings_tails_off + NUM_TRANSFER_RINGS*2
+completion_rings_tails_off = completion_rings_heads_off + NUM_COMPLETION_RINGS*2
+transfer_ring_0_off = roundto(completion_rings_tails_off + NUM_COMPLETION_RINGS*2, 16)
+completion_ring_0_off = roundto(transfer_ring_0_off + 0x10 * 128, 16)
+
+ctx = ContextStruct(
+	version=1,
+	sz=CONTEXTSTRUCT_SZ,
+	enabled_caps=0xa,
+	perInfo=IOVA_START + per_info_off,
+	crHIA=IOVA_START + completion_rings_heads_off,
+	crTIA=IOVA_START + completion_rings_tails_off,
+	trHIA=IOVA_START + transfer_rings_heads_off,
+	trTIA=IOVA_START + transfer_rings_tails_off,
+	crIAEntry=NUM_COMPLETION_RINGS,
+	trIAEntry=NUM_TRANSFER_RINGS,
+	mcr=IOVA_START + completion_ring_0_off,
+	mtr=IOVA_START + transfer_ring_0_off,
+	mtrEntry=128,
+	mcrEntry=128,
+	mtrDb=0,
+	mcrDb=0xffff,
+	mtrMsi=0,
+	mcrMsi=0,
+	mtrOptHeadSize=0,
+	mtrOptFootSize=0,
+	mcrOptHeadSize=0,
+	mcrOptFootSize=0,
+	res_inPlaceComp_oOOComp=0,
+	piMsi=0,
+	scratchPa=0,
+	scratchSize=0,
+	res=0
+)
+ctx_ = struct.pack(CONTEXTSTRUCT_STR, *ctx)
+chexdump(ctx_)
+irq_do_main_stuff=True
+mmiowrite32(RTI_CONTROL, 2)
+
+py_irq_evt.wait()
+py_irq_evt.clear()
+print("Control is now 2")
 
