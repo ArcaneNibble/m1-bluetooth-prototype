@@ -322,7 +322,7 @@ def interrupt_handler():
 						if hdr.pipe_idx == 2:
 							# HCI in
 							print("HCI in")
-							boop_cr(cr_idx, hdr.pipe_idx)
+							boop_cr(hdr.pipe_idx)
 							if DO_VHCI:
 								os.write(vhci_fd, b'\x04' + payload)
 
@@ -468,6 +468,26 @@ completion_rings_tails_off = completion_rings_heads_off + NUM_COMPLETION_RINGS*2
 transfer_ring_0_off = roundto(completion_rings_tails_off + NUM_COMPLETION_RINGS*2, 16)
 completion_ring_0_off = roundto(transfer_ring_0_off + TRANSFERHEADER_SZ * 128, 16)
 ring0_iobuf_off = roundto(completion_ring_0_off + COMPLETIONHEADER_SZ * 128, 16)
+
+def pipe2db(pipe):
+	if pipe == 0:	# control
+		return 0
+	elif pipe == 1:	# HCI
+		return 1
+	elif pipe == 2:	# HCI
+		return 2
+	elif pipe == 3:	# SCO
+		return 6	# XXX special
+	elif pipe == 4:	# SCO
+		return 6	# XXX special
+	elif pipe == 5:	# ACL
+		return 3
+	elif pipe == 6: # ACL
+		return 4
+	elif pipe == 8:	# debug
+		return 5
+	else:
+		assert False
 
 def get_tr_head(idx):
 	return struct.unpack("<H", mapped_memory[transfer_rings_heads_off+idx*2:transfer_rings_heads_off+idx*2+2])[0]
@@ -627,8 +647,9 @@ def send_transfer(pipe, data, wait=True):
 		evt = threading.Event()
 		msg_irqs[(pipe, msg_id)] = evt
 
-	if pipe != 3 and pipe != 4:
-		mmiowrite32(DOORBELL_05, new_tr_head << 16 | pipe << 8 | 0x20)
+	doorbell = pipe2db(pipe)
+	if doorbell != 6:
+		mmiowrite32(DOORBELL_05, new_tr_head << 16 | doorbell << 8 | 0x20)
 	else:
 		mmiowrite32(DOORBELL_6, 1)
 
@@ -735,6 +756,75 @@ openpipe_ = struct.pack(OPENPIPE_STR, *openpipe)
 send_transfer(0, openpipe_)
 transfer_ring_infos[2] = (0xdeadbeefdeadbeef, 128, TRANSFERHEADER_SZ)
 
+# XXX this function might be busticated
+def boop_cr(pipe):
+	tr_head = get_tr_head(pipe)
+	new_tr_head = (tr_head + 1) % transfer_ring_infos[pipe][1]
+	set_tr_head(pipe, new_tr_head)
+
+	doorbell = pipe2db(pipe)
+	if doorbell != 6:
+		mmiowrite32(DOORBELL_05, new_tr_head << 16 | doorbell << 8 | 0x20)
+	else:
+		mmiowrite32(DOORBELL_6, 1)
+
+
+# XXX this function is super busticated
+def recv_from_pipe(pipe):
+	if pipe == 1:
+		cr_idx = 1
+	elif pipe == 2:
+		cr_idx = 2
+	else:
+		assert False
+
+	cr_head = get_cr_head(cr_idx)
+
+	evt = threading.Event()
+	msg_irqs[(pipe, cr_head)] = evt
+
+	boop_cr(pipe)
+
+	evt.wait()
+	del evt
+	del msg_irqs[(pipe, cr_head)]
+
+# BLOB
+with open('bluetooth-taurus-calibration-bf.bin', 'rb') as f:
+	cal_blob = f.read()
+
+remaining_count = divroundup(len(cal_blob), 0xe6) - 1
+for chunk_off in range(0, len(cal_blob), 0xe6):
+	blob_chunk = cal_blob[chunk_off:chunk_off+0xe6]
+	if len(blob_chunk) != 0xe6:
+		blob_chunk += b'\x00' * (0xe6 - len(blob_chunk))
+	command = struct.pack("<HBBH", 0xfd97, 0xe9, 0x03, remaining_count) + blob_chunk
+	send_transfer(1, command)
+	recv_from_pipe(2)
+	remaining_count -=1
+assert remaining_count == -1
+
+# PTB
+with open('BCM4387C2_DVT_Finalv1_PCIE_macOS_MaldivesES2_CLPC_3ANT_OS_USI_K_R_20210723.ptb', 'rb') as f:
+	ptb_blob = f.read()
+
+remaining_count = divroundup(len(ptb_blob), 0xcf) - 1
+for chunk_off in range(0, len(ptb_blob), 0xcf):
+	blob_chunk = ptb_blob[chunk_off:chunk_off+0xcf]
+	if len(blob_chunk) != 0xcf:
+		blob_chunk += b'\x00' * (0xcf - len(blob_chunk))
+	command = struct.pack("<HBH", 0xfe0d, 0xd1, remaining_count) + blob_chunk
+	send_transfer(1, command)
+	recv_from_pipe(2)
+	remaining_count -=1
+assert remaining_count == -1
+
+# reset
+send_transfer(1, b'\x03\x0c\x00')
+recv_from_pipe(2)
+
+
+
 # SCO pipes
 prev_ring_info = transfer_ring_infos[1]
 pipe3_ring_off = roundto(prev_ring_info[0] + prev_ring_info[1] * prev_ring_info[2], 16)
@@ -826,80 +916,13 @@ transfer_ring_infos[6] = (pipe6_ring_off, 128, TRANSFERHEADER_SZ)
 prev_ring_info = transfer_ring_infos[6]
 pipe6_iobuf_off = roundto(prev_ring_info[0] + prev_ring_info[1] * prev_ring_info[2], 16)
 
-def boop_cr(cr_idx, pipe):
-	cr_head = get_cr_head(cr_idx)
-	new_cr_head = (cr_head + 1) % completion_ring_infos[cr_idx][1]
 
-	if pipe != 3 and pipe != 4:
-		# XXX pipe? cr index? shared rings? tbd
-		mmiowrite32(DOORBELL_05, new_cr_head << 16 | pipe << 8 | 0x20)
-	else:
-		mmiowrite32(DOORBELL_6, 1)
-
-
-def recv_from_pipe(pipe):
-	if pipe == 1:
-		cr_idx = 1
-	elif pipe == 2:
-		cr_idx = 2
-	else:
-		assert False
-
-	cr_head = get_cr_head(cr_idx)
-	new_cr_head = (cr_head + 1) % completion_ring_infos[cr_idx][1]
-
-	evt = threading.Event()
-	msg_irqs[(pipe, cr_head)] = evt
-
-	if pipe != 3 and pipe != 4:
-		# XXX pipe? cr index? shared rings? tbd
-		mmiowrite32(DOORBELL_05, new_cr_head << 16 | pipe << 8 | 0x20)
-	else:
-		mmiowrite32(DOORBELL_6, 1)
-
-	evt.wait()
-	del evt
-	del msg_irqs[(pipe, cr_head)]
-
-# BLOB
-with open('bluetooth-taurus-calibration-bf.bin', 'rb') as f:
-	cal_blob = f.read()
-
-remaining_count = divroundup(len(cal_blob), 0xe6) - 1
-for chunk_off in range(0, len(cal_blob), 0xe6):
-	blob_chunk = cal_blob[chunk_off:chunk_off+0xe6]
-	if len(blob_chunk) != 0xe6:
-		blob_chunk += b'\x00' * (0xe6 - len(blob_chunk))
-	command = struct.pack("<HBBH", 0xfd97, 0xe9, 0x03, remaining_count) + blob_chunk
-	send_transfer(1, command)
-	recv_from_pipe(2)
-	remaining_count -=1
-assert remaining_count == -1
-
-# PTB
-with open('BCM4387C2_DVT_Finalv1_PCIE_macOS_MaldivesES2_CLPC_3ANT_OS_USI_K_R_20210723.ptb', 'rb') as f:
-	ptb_blob = f.read()
-
-remaining_count = divroundup(len(ptb_blob), 0xcf) - 1
-for chunk_off in range(0, len(ptb_blob), 0xcf):
-	blob_chunk = ptb_blob[chunk_off:chunk_off+0xcf]
-	if len(blob_chunk) != 0xcf:
-		blob_chunk += b'\x00' * (0xcf - len(blob_chunk))
-	command = struct.pack("<HBH", 0xfe0d, 0xd1, remaining_count) + blob_chunk
-	send_transfer(1, command)
-	recv_from_pipe(2)
-	remaining_count -=1
-assert remaining_count == -1
-
-# reset
-send_transfer(1, b'\x03\x0c\x00')
-recv_from_pipe(2)
 
 if DO_VHCI:
 	vhci_fd = os.open('/dev/vhci', os.O_RDWR)
 	# os.write(vhci_fd, b'\xff\x00')
 
-boop_cr(2, 2)
+boop_cr(2)
 irq_do_magic = True
 
 if DO_VHCI:
