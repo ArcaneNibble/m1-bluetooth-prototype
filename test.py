@@ -312,6 +312,11 @@ def interrupt_handler():
 						payload = data[COMPLETIONHEADER_SZ:COMPLETIONHEADER_SZ+hdr.len_]
 						chexdump(payload)
 
+					if hdr.pipe_idx == 6:
+						# XXX HACK
+						payload = mapped_memory[ring6_iobuf_off:ring6_iobuf_off+hdr.len_]
+						chexdump(payload)
+
 					if (hdr.pipe_idx, hdr.msg_id) in msg_irqs:
 						msg_irqs[(hdr.pipe_idx, hdr.msg_id)].set()
 
@@ -325,6 +330,12 @@ def interrupt_handler():
 							boop_cr(hdr.pipe_idx)
 							if DO_VHCI:
 								os.write(vhci_fd, b'\x04' + payload)
+						elif hdr.pipe_idx == 6:
+							# ACL in
+							print("ACL in")
+							send_transfer(hdr.pipe_idx, b'', False)
+							if DO_VHCI:
+								os.write(vhci_fd, b'\x02' + payload)
 
 irqthread = threading.Thread(target=interrupt_handler)
 irqthread.start()
@@ -621,6 +632,12 @@ def send_transfer(pipe, data, wait=True):
 		assert len(data) == 0x34
 		mapped_memory[ring0_iobuf_off:ring0_iobuf_off+len(data)] = data
 		xfer_iova = IOVA_START+ring0_iobuf_off
+		flags = 1
+	elif pipe == 6:
+		# XXX this is a hack
+		assert len(data) == 0
+		assert wait == False
+		xfer_iova = IOVA_START+pipe6_iobuf_off
 		flags = 1
 	else:
 		assert len(data) <= tr_ent_sz - TRANSFERHEADER_SZ
@@ -923,6 +940,7 @@ if DO_VHCI:
 	# os.write(vhci_fd, b'\xff\x00')
 
 boop_cr(2)
+# send_transfer(6, b'', False)
 irq_do_magic = True
 
 if DO_VHCI:
@@ -932,6 +950,9 @@ if DO_VHCI:
 		if vhci_packet[0] == 0x01:
 			print("HCI out")
 			send_transfer(1, vhci_packet[1:], False)
+		elif vhci_packet[0] == 0x02:
+			print("ACL out")
+			# send_transfer(5, vhci_packet[1:], False)
 		elif vhci_packet[0] == 0xff:
 			print("vendor command")
 		else:
