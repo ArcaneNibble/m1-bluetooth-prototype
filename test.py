@@ -264,20 +264,26 @@ msg_irqs = {}
 completion_ring_infos = {}
 transfer_ring_infos = {}
 
+def dump_trs():
+	for i in range(NUM_TRANSFER_RINGS):
+		print(f"TR{i} head {get_tr_head(i)} tail {get_tr_tail(i)}")
+
+def dump_crs():
+	for i in range(NUM_COMPLETION_RINGS):
+		print(f"CR{i} head {get_cr_head(i)} tail {get_cr_tail(i)}")
+
 def interrupt_handler():
 	while True:
 		events = struct.unpack("<Q", os.read(irqfd, 8))[0]
-		print(f"Got {events} interrupts!")
+		# print(f"Got {events} interrupts!")
 		py_irq_evt.set()
 
 		if irq_do_main_stuff:
 			# print("dump per info")
 			# chexdump(mapped_memory[per_info_off:per_info_off+PER_INFO_SZ])
 
-			for i in range(NUM_TRANSFER_RINGS):
-				print(f"TR{i} head {get_tr_head(i)} tail {get_tr_tail(i)}")
-			for i in range(NUM_COMPLETION_RINGS):
-				print(f"CR{i} head {get_cr_head(i)} tail {get_cr_tail(i)}")
+			# dump_trs()
+			# dump_crs()
 
 			for cr_idx in range(NUM_COMPLETION_RINGS):
 				if cr_idx not in completion_ring_infos:
@@ -611,7 +617,10 @@ def send_transfer(pipe, data, wait=True):
 		evt = threading.Event()
 		msg_irqs[(pipe, msg_id)] = evt
 
-	mmiowrite32(DOORBELL_05, new_tr_head << 16 | pipe << 8 | 0x20)
+	if pipe != 3 and pipe != 4:
+		mmiowrite32(DOORBELL_05, new_tr_head << 16 | pipe << 8 | 0x20)
+	else:
+		mmiowrite32(DOORBELL_6, 1)
 
 	if wait:
 		evt.wait()
@@ -671,6 +680,7 @@ for i in range(1, 6):
 	# chexdump(opencr_)
 	send_transfer(0, opencr_)
 
+# HCI pipes
 prev_ring_info = completion_ring_infos[5]
 pipe1_ring_off = roundto(prev_ring_info[0] + prev_ring_info[1] * prev_ring_info[2], 16)
 openpipe = OpenPipeMessage(
@@ -713,12 +723,58 @@ openpipe_ = struct.pack(OPENPIPE_STR, *openpipe)
 send_transfer(0, openpipe_)
 transfer_ring_infos[2] = (0xdeadbeefdeadbeef, 128, TRANSFERHEADER_SZ)
 
+# SCO pipes
+prev_ring_info = transfer_ring_infos[1]
+pipe3_ring_off = roundto(prev_ring_info[0] + prev_ring_info[1] * prev_ring_info[2], 16)
+openpipe = OpenPipeMessage(
+	msg_type=1,
+	head_size=0,
+	foot_size=66,
+	pad_0x3_=b'\x00',
+	pipe_idx=3,
+	pipe_idx_=3,
+	ring_iova=IOVA_START+pipe3_ring_off,
+	pad_0x10_=b'\x00\x00\x00\x00\x00\x00\x00\x00',
+	ring_count=128,
+	completion_ring_index=3,
+	doorbell_idx=6,
+	flags=0x100,
+	pad_0x20_=b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00')
+print(openpipe)
+openpipe_ = struct.pack(OPENPIPE_STR, *openpipe)
+# chexdump(openpipe_)
+send_transfer(0, openpipe_)
+transfer_ring_infos[3] = (pipe3_ring_off, 128, TRANSFERHEADER_SZ + 66*4)
+
+openpipe = OpenPipeMessage(
+	msg_type=1,
+	head_size=0,
+	foot_size=0,
+	pad_0x3_=b'\x00',
+	pipe_idx=4,
+	pipe_idx_=4,
+	ring_iova=0,
+	pad_0x10_=b'\x00\x00\x00\x00\x00\x00\x00\x00',
+	ring_count=128,
+	completion_ring_index=4,
+	doorbell_idx=6,
+	flags=0x180,
+	pad_0x20_=b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00')
+print(openpipe)
+openpipe_ = struct.pack(OPENPIPE_STR, *openpipe)
+# chexdump(openpipe_)
+send_transfer(0, openpipe_)
+transfer_ring_infos[4] = (0xdeadbeefdeadbeef, 128, TRANSFERHEADER_SZ)
+
 def boop_cr(cr_idx, pipe):
 	cr_head = get_cr_head(cr_idx)
 	new_cr_head = (cr_head + 1) % completion_ring_infos[cr_idx][1]
 
-	# XXX pipe? cr index? shared rings? tbd
-	mmiowrite32(DOORBELL_05, new_cr_head << 16 | pipe << 8 | 0x20)
+	if pipe != 3 and pipe != 4:
+		# XXX pipe? cr index? shared rings? tbd
+		mmiowrite32(DOORBELL_05, new_cr_head << 16 | pipe << 8 | 0x20)
+	else:
+		mmiowrite32(DOORBELL_6, 1)
 
 
 def recv_from_pipe(pipe):
@@ -735,8 +791,11 @@ def recv_from_pipe(pipe):
 	evt = threading.Event()
 	msg_irqs[(pipe, cr_head)] = evt
 
-	# XXX pipe? cr index? shared rings? tbd
-	mmiowrite32(DOORBELL_05, new_cr_head << 16 | pipe << 8 | 0x20)
+	if pipe != 3 and pipe != 4:
+		# XXX pipe? cr index? shared rings? tbd
+		mmiowrite32(DOORBELL_05, new_cr_head << 16 | pipe << 8 | 0x20)
+	else:
+		mmiowrite32(DOORBELL_6, 1)
 
 	evt.wait()
 	del evt
