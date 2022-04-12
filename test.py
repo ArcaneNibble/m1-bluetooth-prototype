@@ -314,10 +314,10 @@ def interrupt_handler():
 
 					# XXX HACK
 					if hdr.pipe_idx == 6:
-						print(hdr)
+						# print(hdr)
 						if hdr.flags & 1:
 							payload = mapped_memory[pipe6_iobuf_off:pipe6_iobuf_off+hdr.len_]
-						chexdump(payload)
+						# chexdump(payload)
 
 					if (hdr.pipe_idx, hdr.msg_id) in msg_irqs:
 						msg_irqs[(hdr.pipe_idx, hdr.msg_id)].set()
@@ -338,6 +338,13 @@ def interrupt_handler():
 							send_transfer(hdr.pipe_idx, b'', False)
 							if DO_VHCI:
 								os.write(vhci_fd, b'\x02' + payload)
+						elif hdr.pipe_idx == 4:
+							# SCO in
+							# print("SCO in")
+							# FIXME: are we poking this too many times?
+							boop_cr(hdr.pipe_idx)
+							if DO_VHCI:
+								os.write(vhci_fd, b'\x03' + payload)
 
 irqthread = threading.Thread(target=interrupt_handler)
 irqthread.start()
@@ -876,7 +883,7 @@ openpipe = OpenPipeMessage(
 print(openpipe)
 openpipe_ = struct.pack(OPENPIPE_STR, *openpipe)
 # chexdump(openpipe_)
-# send_transfer(0, openpipe_)
+send_transfer(0, openpipe_)
 transfer_ring_infos[3] = (pipe3_ring_off, 128, TRANSFERHEADER_SZ + 66*4)
 
 openpipe = OpenPipeMessage(
@@ -896,7 +903,7 @@ openpipe = OpenPipeMessage(
 print(openpipe)
 openpipe_ = struct.pack(OPENPIPE_STR, *openpipe)
 # chexdump(openpipe_)
-# send_transfer(0, openpipe_)
+send_transfer(0, openpipe_)
 transfer_ring_infos[4] = (0xdeadbeefdeadbeef, 128, TRANSFERHEADER_SZ)
 
 # ACL pipes
@@ -955,6 +962,7 @@ if DO_VHCI:
 	# os.write(vhci_fd, b'\xff\x00')
 
 boop_cr(2)
+boop_cr(4)
 send_transfer(6, b'', False)
 irq_do_magic = True
 
@@ -969,6 +977,10 @@ if DO_VHCI:
 			# print("\x1b[31mACL out\x1b[0m")
 			# chexdump(vhci_packet)
 			send_transfer(5, vhci_packet[1:], False)
+		elif vhci_packet[0] == 0x03:
+			# print("\x1b[31mSCO out\x1b[0m")
+			# chexdump(vhci_packet)
+			send_transfer(3, vhci_packet[1:], False)
 		elif vhci_packet[0] == 0xff:
 			print("vendor command")
 		else:
