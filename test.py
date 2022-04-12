@@ -222,7 +222,7 @@ IMG_DOORBELL = bar0 + 0x140
 RTI_CONTROL = bar0 + 0x144
 RTI_SLEEP_CONTROL = bar0 + 0x150
 CHIPCOMMON_CHIP_STATUS = bar0 + 0x302c
-DOORBELL_SOMETHING = bar0 + 0x6620
+DOORBELL_STATUS = bar0 + 0x6620
 DOORBELL_05 = bar0 + 0x174
 DOORBELL_6 = bar0 + 0x154
 REG_21 = bar0 + 0x610
@@ -264,6 +264,10 @@ msg_irqs = {}
 completion_ring_infos = {}
 transfer_ring_infos = {}
 
+def dump_dbs():
+	for i in range(7):
+		print(f"DB{i} val {mmioread32(DOORBELL_STATUS+i*4)}")
+
 def dump_trs():
 	for i in range(NUM_TRANSFER_RINGS):
 		print(f"TR{i} head {get_tr_head(i)} tail {get_tr_tail(i)}")
@@ -275,7 +279,7 @@ def dump_crs():
 def interrupt_handler():
 	while True:
 		events = struct.unpack("<Q", os.read(irqfd, 8))[0]
-		# print(f"Got {events} interrupts!")
+		print(f"Got {events} interrupts!")
 		py_irq_evt.set()
 
 		if irq_do_main_stuff:
@@ -313,6 +317,7 @@ def interrupt_handler():
 
 					set_cr_tail(cr_idx, (cr_ent_idx + 1) % cr_ring_sz)
 
+					barrier()
 					if irq_do_magic:
 						if hdr.pipe_idx == 2:
 							# HCI in
@@ -579,9 +584,14 @@ OPENPIPE_STR = "<BBB1sHHQ8sHHHH20s"
 transfer_ring_infos[0] = (transfer_ring_0_off, 128, TRANSFERHEADER_SZ)
 
 
-msg_id = 123
+msg_ids = {}
 def send_transfer(pipe, data, wait=True):
-	global msg_id
+	global msg_ids
+
+	if pipe not in msg_ids:
+		msg_id = 0
+	else:
+		msg_id = msg_ids[pipe]
 
 	tr_base, tr_ring_sz, tr_ent_sz = transfer_ring_infos[pipe]
 
@@ -626,7 +636,9 @@ def send_transfer(pipe, data, wait=True):
 		evt.wait()
 		del evt
 		del msg_irqs[(pipe, msg_id)]
-	msg_id += 1
+
+	msg_id = (msg_id + 1) % tr_ring_sz
+	msg_ids[pipe] = msg_id
 
 
 completion_ring_infos[0] = (completion_ring_0_off, 128, COMPLETIONHEADER_SZ)
@@ -743,7 +755,7 @@ openpipe = OpenPipeMessage(
 print(openpipe)
 openpipe_ = struct.pack(OPENPIPE_STR, *openpipe)
 # chexdump(openpipe_)
-send_transfer(0, openpipe_)
+# send_transfer(0, openpipe_)
 transfer_ring_infos[3] = (pipe3_ring_off, 128, TRANSFERHEADER_SZ + 66*4)
 
 openpipe = OpenPipeMessage(
@@ -763,8 +775,56 @@ openpipe = OpenPipeMessage(
 print(openpipe)
 openpipe_ = struct.pack(OPENPIPE_STR, *openpipe)
 # chexdump(openpipe_)
-send_transfer(0, openpipe_)
+# send_transfer(0, openpipe_)
 transfer_ring_infos[4] = (0xdeadbeefdeadbeef, 128, TRANSFERHEADER_SZ)
+
+# ACL pipes
+prev_ring_info = transfer_ring_infos[3]
+pipe5_ring_off = roundto(prev_ring_info[0] + prev_ring_info[1] * prev_ring_info[2], 16)
+openpipe = OpenPipeMessage(
+	msg_type=1,
+	head_size=0,
+	foot_size=252,
+	pad_0x3_=b'\x00',
+	pipe_idx=5,
+	pipe_idx_=5,
+	ring_iova=IOVA_START+pipe5_ring_off,
+	pad_0x10_=b'\x00\x00\x00\x00\x00\x00\x00\x00',
+	ring_count=128,
+	completion_ring_index=1,
+	doorbell_idx=3,
+	flags=0,
+	pad_0x20_=b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00')
+print(openpipe)
+openpipe_ = struct.pack(OPENPIPE_STR, *openpipe)
+# chexdump(openpipe_)
+send_transfer(0, openpipe_)
+transfer_ring_infos[5] = (pipe5_ring_off, 128, TRANSFERHEADER_SZ + 252*4)
+
+prev_ring_info = transfer_ring_infos[5]
+pipe6_ring_off = roundto(prev_ring_info[0] + prev_ring_info[1] * prev_ring_info[2], 16)
+openpipe = OpenPipeMessage(
+	msg_type=1,
+	head_size=0,
+	foot_size=0,
+	pad_0x3_=b'\x00',
+	pipe_idx=6,
+	pipe_idx_=6,
+	ring_iova=IOVA_START+pipe6_ring_off,
+	pad_0x10_=b'\x00\x00\x00\x00\x00\x00\x00\x00',
+	ring_count=128,
+	completion_ring_index=2,
+	doorbell_idx=4,
+	flags=0,
+	pad_0x20_=b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00')
+print(openpipe)
+openpipe_ = struct.pack(OPENPIPE_STR, *openpipe)
+# chexdump(openpipe_)
+send_transfer(0, openpipe_)
+transfer_ring_infos[6] = (pipe6_ring_off, 128, TRANSFERHEADER_SZ)
+
+prev_ring_info = transfer_ring_infos[6]
+pipe6_iobuf_off = roundto(prev_ring_info[0] + prev_ring_info[1] * prev_ring_info[2], 16)
 
 def boop_cr(cr_idx, pipe):
 	cr_head = get_cr_head(cr_idx)
