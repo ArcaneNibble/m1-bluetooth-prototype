@@ -12,7 +12,7 @@ import time
 import threading
 
 
-DO_VHCI = False
+DO_VHCI = True
 
 
 def _ascii(s):
@@ -314,7 +314,7 @@ def interrupt_handler():
 
 					if hdr.pipe_idx == 6:
 						# XXX HACK
-						payload = mapped_memory[ring6_iobuf_off:ring6_iobuf_off+hdr.len_]
+						payload = mapped_memory[pipe6_iobuf_off:pipe6_iobuf_off+hdr.len_]
 						chexdump(payload)
 
 					if (hdr.pipe_idx, hdr.msg_id) in msg_irqs:
@@ -628,6 +628,7 @@ def send_transfer(pipe, data, wait=True):
 
 	tr_head = get_tr_head(pipe)
 	tr_off = tr_base + tr_head*tr_ent_sz
+	len_ = len(data)
 	if pipe == 0:
 		assert len(data) == 0x34
 		mapped_memory[ring0_iobuf_off:ring0_iobuf_off+len(data)] = data
@@ -636,6 +637,7 @@ def send_transfer(pipe, data, wait=True):
 	elif pipe == 6:
 		# XXX this is a hack
 		assert len(data) == 0
+		len_ = 0x1000
 		assert wait == False
 		xfer_iova = IOVA_START+pipe6_iobuf_off
 		flags = 1
@@ -647,7 +649,7 @@ def send_transfer(pipe, data, wait=True):
 
 	transfer_hdr = TransferHeader(
 		flags=flags,
-		len_=len(data),
+		len_=len_,
 		unk_0x3_=b'\x00',
 		buf_iova=xfer_iova,
 		msg_id=msg_id,
@@ -940,7 +942,7 @@ if DO_VHCI:
 	# os.write(vhci_fd, b'\xff\x00')
 
 boop_cr(2)
-# send_transfer(6, b'', False)
+send_transfer(6, b'', False)
 irq_do_magic = True
 
 if DO_VHCI:
@@ -951,7 +953,7 @@ if DO_VHCI:
 			print("HCI out")
 			send_transfer(1, vhci_packet[1:], False)
 		elif vhci_packet[0] == 0x02:
-			print("ACL out")
+			print("\x1b[31mACL out\x1b[0m")
 			# send_transfer(5, vhci_packet[1:], False)
 		elif vhci_packet[0] == 0xff:
 			print("vendor command")
