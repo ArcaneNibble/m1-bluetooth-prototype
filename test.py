@@ -12,6 +12,9 @@ import time
 import threading
 
 
+DO_VHCI = False
+
+
 def _ascii(s):
     s2 = ""
     for c in s:
@@ -309,7 +312,8 @@ def interrupt_handler():
 							# HCI in
 							print("HCI in")
 							boop_cr(cr_idx, hdr.pipe_idx)
-							os.write(vhci_fd, b'\x04' + payload)
+							if DO_VHCI:
+								os.write(vhci_fd, b'\x04' + payload)
 
 irqthread = threading.Thread(target=interrupt_handler)
 irqthread.start()
@@ -772,20 +776,22 @@ assert remaining_count == -1
 send_transfer(1, b'\x03\x0c\x00')
 recv_from_pipe(2)
 
-vhci_fd = os.open('/dev/vhci', os.O_RDWR)
-# os.write(vhci_fd, b'\xff\x00')
+if DO_VHCI:
+	vhci_fd = os.open('/dev/vhci', os.O_RDWR)
+	# os.write(vhci_fd, b'\xff\x00')
 
 boop_cr(2, 2)
 irq_do_magic = True
 
-while True:
-	vhci_packet = os.read(vhci_fd, 1024)
-	chexdump(vhci_packet)
-	if vhci_packet[0] == 0x01:
-		print("HCI out")
-		send_transfer(1, vhci_packet[1:], False)
-	elif vhci_packet[0] == 0xff:
-		print("vendor command")
-	else:
-		print("UNKNOWN VHCI command")
+if DO_VHCI:
+	while True:
+		vhci_packet = os.read(vhci_fd, 1024)
+		chexdump(vhci_packet)
+		if vhci_packet[0] == 0x01:
+			print("HCI out")
+			send_transfer(1, vhci_packet[1:], False)
+		elif vhci_packet[0] == 0xff:
+			print("vendor command")
+		else:
+			print("UNKNOWN VHCI command")
 
