@@ -312,9 +312,11 @@ def interrupt_handler():
 						payload = data[COMPLETIONHEADER_SZ:COMPLETIONHEADER_SZ+hdr.len_]
 						# chexdump(payload)
 
+					# XXX HACK
 					if hdr.pipe_idx == 6:
-						# XXX HACK
-						payload = mapped_memory[pipe6_iobuf_off:pipe6_iobuf_off+hdr.len_]
+						print(hdr)
+						if hdr.flags & 1:
+							payload = mapped_memory[pipe6_iobuf_off:pipe6_iobuf_off+hdr.len_]
 						chexdump(payload)
 
 					if (hdr.pipe_idx, hdr.msg_id) in msg_irqs:
