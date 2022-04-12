@@ -279,7 +279,7 @@ def dump_crs():
 def interrupt_handler():
 	while True:
 		events = struct.unpack("<Q", os.read(irqfd, 8))[0]
-		print(f"Got {events} interrupts!")
+		# print(f"Got {events} interrupts!")
 		py_irq_evt.set()
 
 		if irq_do_main_stuff:
@@ -303,14 +303,14 @@ def interrupt_handler():
 
 				for cr_ent_idx in range_:
 					data = mapped_memory[cr_off+cr_ent_idx*cr_ent_sz:cr_off+(cr_ent_idx+1)*cr_ent_sz]
-					print(f"Data on CR{cr_idx}")
+					# print(f"Data on CR{cr_idx}")
 					# chexdump(data)
 					hdr = CompletionHeader._make(struct.unpack(COMPLETIONHEADER_STR, data[:COMPLETIONHEADER_SZ]))
-					print(hdr)
+					# print(hdr)
 					payload = b''
 					if hdr.flags & 2:
 						payload = data[COMPLETIONHEADER_SZ:COMPLETIONHEADER_SZ+hdr.len_]
-						chexdump(payload)
+						# chexdump(payload)
 
 					if hdr.pipe_idx == 6:
 						# XXX HACK
@@ -326,7 +326,7 @@ def interrupt_handler():
 					if irq_do_magic:
 						if hdr.pipe_idx == 2:
 							# HCI in
-							print("HCI in")
+							# print("HCI in")
 							boop_cr(hdr.pipe_idx)
 							if DO_VHCI:
 								os.write(vhci_fd, b'\x04' + payload)
@@ -510,16 +510,16 @@ def get_cr_tail(idx):
 	return struct.unpack("<H", mapped_memory[completion_rings_tails_off+idx*2:completion_rings_tails_off+idx*2+2])[0]
 
 def set_tr_head(idx, val):
-	print(f"TR{idx} head -> {val}")
+	# print(f"TR{idx} head -> {val}")
 	mapped_memory[transfer_rings_heads_off+idx*2:transfer_rings_heads_off+idx*2+2] = struct.pack("<H", val)
 def set_tr_tail(idx, val):
-	print(f"TR{idx} tail -> {val}")
+	# print(f"TR{idx} tail -> {val}")
 	mapped_memory[transfer_rings_tails_off+idx*2:transfer_rings_tails_off+idx*2+2] = struct.pack("<H", val)
 def set_cr_head(idx, val):
-	print(f"CR{idx} head -> {val}")
+	# print(f"CR{idx} head -> {val}")
 	mapped_memory[completion_rings_heads_off+idx*2:completion_rings_heads_off+idx*2+2] = struct.pack("<H", val)
 def set_cr_tail(idx, val):
-	print(f"CR{idx} tail -> {val}")
+	# print(f"CR{idx} tail -> {val}")
 	mapped_memory[completion_rings_tails_off+idx*2:completion_rings_tails_off+idx*2+2] = struct.pack("<H", val)
 
 ctx = ContextStruct(
@@ -948,13 +948,14 @@ irq_do_magic = True
 if DO_VHCI:
 	while True:
 		vhci_packet = os.read(vhci_fd, 1024)
-		chexdump(vhci_packet)
+		# chexdump(vhci_packet)
 		if vhci_packet[0] == 0x01:
-			print("HCI out")
+			# print("HCI out")
 			send_transfer(1, vhci_packet[1:], False)
 		elif vhci_packet[0] == 0x02:
 			print("\x1b[31mACL out\x1b[0m")
-			# send_transfer(5, vhci_packet[1:], False)
+			chexdump(vhci_packet)
+			send_transfer(5, vhci_packet[1:], False)
 		elif vhci_packet[0] == 0xff:
 			print("vendor command")
 		else:
