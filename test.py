@@ -334,7 +334,7 @@ def interrupt_handler():
 								os.write(vhci_fd, b'\x04' + payload)
 						elif hdr.pipe_idx == 6:
 							# ACL in
-							print("ACL in")
+							# print("ACL in")
 							send_transfer(hdr.pipe_idx, b'', False)
 							if DO_VHCI:
 								os.write(vhci_fd, b'\x02' + payload)
@@ -643,6 +643,16 @@ def send_transfer(pipe, data, wait=True):
 		assert wait == False
 		xfer_iova = IOVA_START+pipe6_iobuf_off
 		flags = 1
+	elif pipe == 5:
+		# XXX this is also a hack
+		if len(data) <= tr_ent_sz - TRANSFERHEADER_SZ:
+			mapped_memory[tr_off+TRANSFERHEADER_SZ:tr_off+TRANSFERHEADER_SZ+len(data)] = data
+			xfer_iova = 0
+			flags = 2
+		else:
+			mapped_memory[pipe5_iobuf_off:pipe5_iobuf_off+len(data)] = data
+			xfer_iova = IOVA_START+pipe5_iobuf_off
+			flags=1
 	else:
 		assert len(data) <= tr_ent_sz - TRANSFERHEADER_SZ
 		mapped_memory[tr_off+TRANSFERHEADER_SZ:tr_off+TRANSFERHEADER_SZ+len(data)] = data
@@ -936,6 +946,7 @@ transfer_ring_infos[6] = (pipe6_ring_off, 128, TRANSFERHEADER_SZ)
 
 prev_ring_info = transfer_ring_infos[6]
 pipe6_iobuf_off = roundto(prev_ring_info[0] + prev_ring_info[1] * prev_ring_info[2], 16)
+pipe5_iobuf_off = pipe6_iobuf_off + 0x1000
 
 
 
@@ -955,8 +966,8 @@ if DO_VHCI:
 			# print("HCI out")
 			send_transfer(1, vhci_packet[1:], False)
 		elif vhci_packet[0] == 0x02:
-			print("\x1b[31mACL out\x1b[0m")
-			chexdump(vhci_packet)
+			# print("\x1b[31mACL out\x1b[0m")
+			# chexdump(vhci_packet)
 			send_transfer(5, vhci_packet[1:], False)
 		elif vhci_packet[0] == 0xff:
 			print("vendor command")
